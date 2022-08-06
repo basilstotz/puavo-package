@@ -1,0 +1,10 @@
+#!/bin/sh
+
+echo "#!/bin/sh"
+echo "cat <<EOF | base64 -d | tar -x -z -f - -C /"
+
+cd tree
+tar -c -z -f - . | base64
+
+echo "EOF"
+echo "exit"

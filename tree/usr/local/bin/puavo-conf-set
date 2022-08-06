@@ -1,0 +1,52 @@
+#!/bin/sh
+
+if test -z "$1";then
+    echo "usage: puavo-conf-set <file>"
+    exit 1
+fi
+
+INPUT="$1"
+
+
+FILE="/usr/local/bin/puavo-conf"
+
+HOSTTYPE=$(cat /etc/puavo/hosttype)
+IMAGESERVER=$(cat /etc/puavo/imageserver)
+
+cat <<'EOF'> $FILE
+#!/bin/sh
+if test -n "$1";then
+   case $1 in
+EOF
+
+echo "      puavo.hosttype) echo \"$HOSTTYPE\" ;;" >> $FILE 
+echo "      puavo.image.servers) echo \"$IMAGESERVER\" ;;" >> $FILE 
+
+while read -r KEY VALUE; do
+    if test -n "$KEY"; then
+	echo "      $KEY) echo \"$VALUE\" ;;" >> $FILE
+    fi
+done < $INPUT
+
+cat <<'EOF'>> $FILE 
+      *) echo -n "" ;;
+   esac
+else
+  cat <<EOFF
+EOF
+
+echo "puavo.hosttype $HOSTTYPE" >> $FILE
+echo "puavo.image.servers $IMAGESERVER" >> $FILE
+
+cat $INPUT >> $FILE
+
+echo >> $FILE
+
+cat <<EOF >> $FILE
+EOFF
+fi 
+exit 0
+EOF
+
+chmod +x $FILE
+

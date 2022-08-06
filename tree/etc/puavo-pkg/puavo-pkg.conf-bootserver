@@ -1,0 +1,7 @@
+
+# for laptop or bootserver
+PUAVO_PKG_CACHEDIR=/images/puavo-pkg/cache
+PUAVO_PKG_ROOTDIR=/images/puavo-pkg/root
+
+#PUAVO_PKG_CACHEDIR=/var/cache/puavo-pkg
+#PUAVO_PKG_ROOTDIR=/var/lib/puavo-pkg

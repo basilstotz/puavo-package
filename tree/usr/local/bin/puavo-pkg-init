@@ -1,0 +1,90 @@
+#!/bin/sh
+
+if test -z "$1";then
+    echo "usage: sudo puavo-pkg-init fatclient|laptop|bootserver"
+    exit 1
+else
+    HOSTTYPE="$1"
+fi
+
+case "$HOSTTYPE" in
+    laptop|bootserver)
+	if ! mountpoint --quiet /images;then
+	    echo "error: need to have a mountpoint at /images"
+	    exit 1
+	fi
+	;;
+    fatclient)
+	echo "todo: make mountpoint fon nfs"
+	;;
+    *)
+	;;
+esac
+
+IMAGESERVER=$(ls /etc/puavo-pkg/gnupg)
+
+echo "$IMAGESERVER" >/etc/puavo/imageserver
+echo "$HOSTTYPE" > /etc/puavo/hosttype
+
+
+# make initial puavo-conf
+FILE="/usr/local/bin/puavo-conf"
+if ! test -x $FILE;then
+
+cat <<'EOF'> $FILE
+#!/bin/sh
+if test -n "$1";then
+   case $1 in
+EOF
+
+echo "      puavo.hosttype) echo \"$HOSTTYPE\" ;;" >> $FILE 
+echo "      puavo.image.servers) echo \"$IMAGESERVER\" ;;" >> $FILE 
+
+cat <<'EOF'>> $FILE 
+      *) echo -n "" ;;
+   esac
+else
+  cat <<EOFF
+EOF
+
+echo "puavo.hosttype $HOSTTYPE" >> $FILE
+echo "puavo.image.servers $IMAGESERVER" >> $FILE
+
+echo >> $FILE
+
+cat <<EOF >> $FILE
+EOFF
+fi 
+exit 0
+EOF
+
+    
+    chmod +x $FILE
+fi
+
+#make user
+if ! getent passwd | grep -q puavo-pkg; then
+     useradd  --home-dir /tmp/puavo-pkg-home --create-home --system  puavo-pkg
+fi
+
+#install gnupg
+dir="/root/.puavo"
+mkdir -p $dir
+cp -r /etc/puavo-pkg/gnupg $dir/.
+
+#install puavo-pkg.conf
+case $1 in
+    laptop|bootserver)
+	cp /etc/puavo-pkg/puavo-pkg.conf-bootserver /etc/puavo-pkg/puavo-pkg.conf
+	;;
+    fatclient)
+	cp /etc/puavo-pkg/puavo-pkg.conf-fatclient /etc/puavo-pkg/puavo-pkg.conf
+	;;
+    *)
+	echo "usage: sudo puavo-pkg-init fatclient|laptop|bootserver"
+	exit 1
+	;;
+esac
+
+exit 0
+
