@@ -1,0 +1,220 @@
+#!/bin/sh
+
+set -eu
+
+status=0
+
+remote_mountdir='/var/mnt/bootserver/puavo-pkg'
+remote_cachedir="${remote_mountdir}/cache"
+remote_rootdir="${remote_mountdir}/root"
+
+local_cachedir='/images/puavo-pkg/cache'
+local_rootdir='/images/puavo-pkg/root'
+
+system_cachedir='/var/cache/puavo-pkg'
+system_rootdir='/var/lib/puavo-pkg'
+
+install_puavo_pkg_conf() {
+  puavo_pkg_cachedir=$1
+  puavo_pkg_rootdir=$2
+  puavo_pkg_readonly_cachedir=$3
+  puavo_pkg_readonly_rootdir=$4
+
+  puavo_pkg_conf_path='/etc/puavo-pkg/puavo-pkg.conf'
+
+  mkdir -p /etc/puavo-pkg
+
+  {
+    [ -n "$puavo_pkg_cachedir" ] \
+      && echo "PUAVO_PKG_CACHEDIR=${puavo_pkg_cachedir}"
+    [ -n "$puavo_pkg_rootdir" ] \
+      && echo "PUAVO_PKG_ROOTDIR=${puavo_pkg_rootdir}"
+    [ -n "$puavo_pkg_readonly_cachedir" ] \
+      && echo "PUAVO_PKG_READONLY_CACHEDIR=${puavo_pkg_readonly_cachedir}"
+    [ -n "$puavo_pkg_readonly_rootdir" ] \
+      && echo "PUAVO_PKG_READONLY_ROOTDIR=${puavo_pkg_readonly_rootdir}"
+  } > "${puavo_pkg_conf_path}.tmp"
+
+  mv "${puavo_pkg_conf_path}.tmp" "$puavo_pkg_conf_path"
+}
+
+reconfigure_puavopkg() {
+  timeout -k 5 60 puavo-pkg reconfigure "$@"
+}
+
+reconfigure_upgrade_pkg() {
+  timeout -k 5 60 puavo-pkg reconfigure-upgrade "$@"
+}
+
+test_puavopkg_system_installation() {
+  puavo_pkg=$1
+
+  installed_path="${system_rootdir}/packages/${puavo_pkg}"
+  test -d "$installed_path"
+}
+
+get_installed_version() {
+  pkg_name=$1
+  syspkg_conflink="${system_rootdir}/installed/${pkg_name}"
+  syspkg_version=$(
+    mawk '$1 == "version" && $2 ~ /^[0-9]+$/ { print $2 }' \
+      "${syspkg_conflink}/.puavo-pkg-version" 2>/dev/null || true)
+  if [ -z "$syspkg_version" ]; then
+    syspkg_version=0
+  fi
+
+  echo "$syspkg_version"
+}
+
+get_dir_with_latest_installed_version() {
+  other_pkg_dir=$1
+  current_version=$2
+  pkg_name=$3
+  installed_marker_name=$4
+  other_rootdir=$5
+
+  latest_available_pkg_dir=
+  latest_available_pkg_version=0
+  latest_installed_pkg_dir=
+  latest_installed_pkg_version=0
+
+  for pkgid_dir in ${other_pkg_dir}/*; do
+    pkg_version=$(
+      mawk '$1 == "version" && $2 ~ /^[0-9]+$/ { print $2 }' \
+        "${pkgid_dir}/.puavo-pkg-version" 2>/dev/null || true)
+    if [ -z "$pkg_version" ]; then
+      echo "could not lookup version for ${pkgid_dir}" >&2
+      status=1
+      continue
+    fi
+
+    if [ "$latest_available_pkg_version" -lt "$pkg_version" ]; then
+      latest_available_pkg_dir="$pkgid_dir"
+      latest_available_pkg_version="$pkg_version"
+    fi
+    if [ "$latest_installed_pkg_version" -lt "$pkg_version" \
+         -a -e "${pkgid_dir}/${installed_marker_name}" ]; then
+      latest_installed_pkg_dir="$pkgid_dir"
+      latest_installed_pkg_version="$pkg_version"
+    fi
+  done
+
+  if [ -n "$latest_available_pkg_dir" ]; then
+    ln -fns "$latest_available_pkg_dir" "/var/lib/puavo-pkg/available/${pkg_name}"
+  fi
+
+  if [ "$latest_installed_pkg_version" -le "$current_version" ]; then
+    return
+  fi
+
+  echo "$latest_installed_pkg_dir"
+}
+
+configure_latest_from() {
+  other_rootdir=$1
+  installed_marker_name=$2
+
+  for other_pkgdir in ${other_rootdir}/packages/*; do
+    test -d "$other_pkgdir" || continue
+
+    pkg_name=${other_pkgdir##${other_rootdir}/packages/}
+
+    syspkg_version="$(get_installed_version "$pkg_name")"
+
+    other_pkgid_dir=$(get_dir_with_latest_installed_version \
+                        "$other_pkgdir"                     \
+                        "$syspkg_version"                   \
+                        "$pkg_name"                         \
+                        "$installed_marker_name"            \
+                        "$other_rootdir")
+
+    if [ -d "$other_pkgid_dir" ]; then
+      # on fatclients we support only configuring the latest version
+      # that is on the bootserver
+      puavo_pkg_spec=$(puavo-conf "puavo.pkg.${pkg_name}" 2>/dev/null) || true
+      case "$puavo_pkg_spec" in
+        install|install:*|latest)
+          case "$puavo_pkg_spec" in
+            install:*) echo "ignoring version in puavo.pkg.${pkg_name}" ;;
+          esac
+
+          reconfigure_upgrade_pkg "$pkg_name" "$other_pkgid_dir" || status=1
+          ;;
+      esac
+  fi
+
+  done
+}
+
+setup_puavopkg_for_localboot_devices() {
+  # Setup puavo-pkgs from under $local_rootdir only if they are missing
+  # from the system image, or the versions under $local_rootdir are
+  # newer than the versions in system image.
+
+  install_puavo_pkg_conf "$local_cachedir"  \
+                         "$local_rootdir"   \
+                         "$system_cachedir" \
+                         "$system_rootdir"
+
+  configure_latest_from "$local_rootdir" .installed
+}
+
+setup_puavopkg_for_netboot_devices() {
+  # mount /images/puavo-pkg from bootserver in case we have booted from network
+    read nbd_server < /run/puavo/nbd-server
+    #read nbd_server < /etc/puavo-pkg/server
+    
+  mkdir -p /cow/puavo-pkg "$remote_mountdir" "${remote_mountdir}.rofs"
+  mount -t ramfs none /cow/puavo-pkg
+  mkdir -p /cow/puavo-pkg/rootdir /cow/puavo-pkg/workdir
+  
+  #if ! timeout -k 5 30 mount -t nfs4 -o ro,sec=sys "${nbd_server}:/puavo-pkg" \
+  #                                                 "${remote_mountdir}.rofs"; then
+
+  if ! timeout -k 5 30 mount -o ro "$nbd_server:/images/puavo-pkg" "${remote_mountdir}.rofs";then
+
+      echo "could not mount ${nbd_server}:/images/puavo-pkg" >&2
+      return 1
+  fi
+      
+  
+  mount -t overlay \
+        -o "upperdir=/cow/puavo-pkg/rootdir,lowerdir=${remote_mountdir}.rofs,workdir=/cow/puavo-pkg/workdir" \
+        overlay "$remote_mountdir"
+
+  install_puavo_pkg_conf "$system_cachedir" \
+                         "$system_rootdir"  \
+                         "$remote_cachedir" \
+                         "$remote_rootdir"
+
+  configure_latest_from "$remote_rootdir" .prepared
+}
+
+remove_puavopkgs() {
+  # Some folks do not want some packages, even including ones we may have
+  # in the image.  Provide a way to make those "mostly disappear" by
+  # configuring with puavo-conf, including both fatclients and laptops.
+  puavopkgs_to_remove=$(puavo-conf \
+                          | awk '$1 ~ /^puavo.pkg./ && $2 == "remove" {
+                                   sub(/^puavo.pkg./, "", $1); print $1
+                                 }')
+  for pkg_name in $puavopkgs_to_remove; do
+    if [ -e "/var/lib/puavo-pkg/installed/${pkg_name}" ]; then
+      puavo-pkg remove "$pkg_name" || status=1
+    fi
+  done
+}
+
+# Then setup puavo-pkg configuration to include possible packages from
+# bootserver or locally installed puavo-pkg images.  (Note that this does
+# not install or update the puavo-pkg packages, only sets them up at boottime).
+
+if [ -e /run/puavo/nbd-server ]; then
+  setup_puavopkg_for_netboot_devices
+else
+  setup_puavopkg_for_localboot_devices
+fi
+
+remove_puavopkgs
+
+exit $status
