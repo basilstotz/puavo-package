@@ -7,4 +7,5 @@ cd puavo-package
 tar -c -z -f - . | base64
 
 echo "EOF"
+echo "echo info: puavo-package is installed"
 echo "exit"

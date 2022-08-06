@@ -15,7 +15,14 @@ case "$HOSTTYPE" in
 	fi
 	;;
     fatclient)
-	echo "todo: make mountpoint fon nfs"
+	SERVER=$(cat /etc/hosts|grep server|xargs|cut -d" " -f1)
+	#echo $SERVER > /etc/puavo-pkg/server
+	mkdir -p /run/puavo
+	echo $SERVER > /run/puavo/nbd-server
+
+	mkdir -p /var/lib/puavo-pkg/available
+	mkdir -p /var/lib/puavo-pkg/installed
+	
 	;;
     *)
 	;;
